@@ -1,0 +1,9 @@
+@baseUrl = http://localhost:5088
+
+GET {{baseUrl}}/api/rate-imports/history
+Accept: application/json
+
+###
+
+GET {{baseUrl}}/api/rates/lookup?direction=EXPORT&serviceCode=IP&packageType=Package&weight=2.5&country=Australia
+Accept: application/json

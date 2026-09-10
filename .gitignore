@@ -1,0 +1,28 @@
+## Build
+bin/
+obj/
+publish/
+logs/
+.vs/
+*.user
+*.suo
+*.useros
+*.sln.docstates
+
+## Secrets / local overrides (never commit)
+appsettings.Local.json
+appsettings.Production.json
+appsettings.*.Local.json
+secrets.json
+.env
+.env.*
+
+## Runtime uploads
+App_Data/pickup-captures/**
+!App_Data/pickup-captures/.gitkeep
+
+## OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
