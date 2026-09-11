@@ -40,6 +40,7 @@ builder.Services.AddScoped<PlatformDataService>();
 builder.Services.AddScoped<RateQuoteService>();
 builder.Services.AddScoped<ScaleImportService>();
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
+builder.Services.AddHttpClient<IGeocodingService, GeocodingService>();
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

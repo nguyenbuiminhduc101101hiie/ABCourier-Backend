@@ -90,6 +90,7 @@ public sealed class UsersController(
             CompanyName = request.CompanyName.Trim(),
             TaxCode = TrimOrNull(request.TaxCode),
             BillingEmail = TrimOrNull(request.BillingEmail),
+            Address = TrimOrNull(request.Address),
             CreditLimit = request.CreditLimit,
             BillingCycle = string.IsNullOrWhiteSpace(request.BillingCycle) ? "Monthly" : request.BillingCycle.Trim(),
             RatePlanCode = TrimOrNull(request.RatePlanCode),
@@ -128,6 +129,7 @@ public sealed class UsersController(
         customer.CompanyName = request.CompanyName.Trim();
         customer.TaxCode = TrimOrNull(request.TaxCode);
         customer.BillingEmail = TrimOrNull(request.BillingEmail);
+        customer.Address = TrimOrNull(request.Address);
         customer.CreditLimit = request.CreditLimit;
         customer.BillingCycle = string.IsNullOrWhiteSpace(request.BillingCycle) ? "Monthly" : request.BillingCycle.Trim();
         customer.RatePlanCode = TrimOrNull(request.RatePlanCode);
@@ -290,6 +292,7 @@ public sealed class UsersController(
         x.CompanyName,
         x.TaxCode,
         x.BillingEmail,
+        x.Address,
         x.CreditLimit,
         x.BillingCycle,
         x.RatePlanCode,

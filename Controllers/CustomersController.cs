@@ -62,6 +62,7 @@ public sealed class CustomersController(AppDbContext db, AuthService auth) : Con
             CompanyName = request.CompanyName.Trim(),
             TaxCode = TrimOrNull(request.TaxCode),
             BillingEmail = TrimOrNull(request.BillingEmail),
+            Address = TrimOrNull(request.Address),
             CreditLimit = request.CreditLimit,
             BillingCycle = NormalizeCycle(request.BillingCycle),
             RatePlanCode = TrimOrNull(request.RatePlanCode),
@@ -100,6 +101,7 @@ public sealed class CustomersController(AppDbContext db, AuthService auth) : Con
         customer.CompanyName = request.CompanyName.Trim();
         customer.TaxCode = TrimOrNull(request.TaxCode);
         customer.BillingEmail = TrimOrNull(request.BillingEmail);
+        customer.Address = TrimOrNull(request.Address);
         customer.CreditLimit = request.CreditLimit;
         customer.BillingCycle = NormalizeCycle(request.BillingCycle);
         customer.RatePlanCode = TrimOrNull(request.RatePlanCode);
@@ -150,6 +152,7 @@ public sealed class CustomersController(AppDbContext db, AuthService auth) : Con
         x.CompanyName,
         x.TaxCode,
         x.BillingEmail,
+        x.Address,
         x.CreditLimit,
         x.BillingCycle,
         x.RatePlanCode,

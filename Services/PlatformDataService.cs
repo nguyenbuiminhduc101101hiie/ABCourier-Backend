@@ -5,8 +5,48 @@ using Microsoft.EntityFrameworkCore;
 
 namespace CourierApi.Services;
 
-public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes, IWebHostEnvironment env)
+public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes, IWebHostEnvironment env, IGeocodingService geocoding)
 {
+    public async Task<DirectionsRouteDto?> GetPickupDirectionsAsync(string pickupNo, CancellationToken ct = default)
+    {
+        var task = await db.PickupTasks
+            .Include(x => x.Booking).ThenInclude(b => b.Customer)
+            .FirstOrDefaultAsync(x => x.PickupNo == pickupNo, ct);
+        if (task is null) return null;
+
+        var destinationAddress = task.Booking.Customer.Address?.Trim();
+        if (string.IsNullOrEmpty(destinationAddress))
+        {
+            throw new InvalidOperationException("Khách hàng chưa có địa chỉ.");
+        }
+
+        var companyInfo = await db.CompanyInformation.AsNoTracking().OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        var originAddress = companyInfo?.Address?.Trim();
+        if (string.IsNullOrEmpty(originAddress))
+        {
+            throw new InvalidOperationException("Chưa cấu hình địa chỉ công ty.");
+        }
+
+        var originGeo = await geocoding.GeocodeAddressAsync(originAddress, ct)
+            ?? throw new InvalidOperationException("Không xác định được vị trí địa chỉ công ty.");
+        var destGeo = await geocoding.GeocodeAddressAsync(destinationAddress, ct)
+            ?? throw new InvalidOperationException("Không xác định được vị trí địa chỉ khách hàng.");
+
+        var directions = await geocoding.GetDirectionsAsync(originGeo.Lat, originGeo.Lng, destGeo.Lat, destGeo.Lng, ct)
+            ?? throw new InvalidOperationException("Không tìm được tuyến đường.");
+
+        return new DirectionsRouteDto(
+            originGeo.Lat,
+            originGeo.Lng,
+            originAddress,
+            destGeo.Lat,
+            destGeo.Lng,
+            destinationAddress,
+            directions.Points.Select(p => new GeoPointDto(p.Lat, p.Lng)).ToList(),
+            directions.DistanceMeters,
+            directions.DurationSeconds);
+    }
+
     public async Task<DashboardDto> GetDashboardAsync(Guid? customerId, CancellationToken ct = default, Guid? salesUserId = null)
     {
         var bookingsQuery = db.Bookings.AsQueryable();

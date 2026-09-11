@@ -196,6 +196,20 @@ public sealed class PlatformController(
         return Ok(await service.GetPickupTasksAsync(staffFilter, ct));
     }
 
+    [HttpGet("pickup-tasks/{pickupNo}/directions")]
+    public async Task<ActionResult<DirectionsRouteDto>> PickupDirections(string pickupNo, CancellationToken ct)
+    {
+        try
+        {
+            var result = await service.GetPickupDirectionsAsync(pickupNo, ct);
+            return result is null ? NotFound(new { message = "Không tìm thấy pickup task." }) : Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpPost("pickup-tasks/{pickupNo}/confirm")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(20 * 1024 * 1024)]

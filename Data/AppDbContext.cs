@@ -12,6 +12,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<RateSurcharge> RateSurcharges => Set<RateSurcharge>();
 
     public DbSet<AppUser> Users => Set<AppUser>();
+    public DbSet<CompanyInformation> CompanyInformation => Set<CompanyInformation>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<CustomerAddress> CustomerAddresses => Set<CustomerAddress>();
     public DbSet<Booking> Bookings => Set<Booking>();
@@ -128,12 +129,24 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<CompanyInformation>(entity =>
+        {
+            entity.ToTable("CompanyInformation_ABCourier");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.CompanyName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.TaxCode).HasMaxLength(30);
+            entity.Property(x => x.Address).HasMaxLength(500);
+            entity.Property(x => x.Phone).HasMaxLength(40);
+            entity.Property(x => x.Email).HasMaxLength(200);
+        });
+
         modelBuilder.Entity<Customer>(entity =>
         {
             entity.ToTable("Customers_ABCourier");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.CustomerCode).HasMaxLength(30).IsRequired();
             entity.Property(x => x.CompanyName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Address).HasMaxLength(500);
             entity.Property(x => x.CreditLimit).HasPrecision(18, 2);
             entity.HasIndex(x => x.CustomerCode).IsUnique();
             entity.HasOne(x => x.SalesUser)
