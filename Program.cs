@@ -8,13 +8,20 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using QuestPDF.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
+// QuestPDF Community license: miễn phí khi doanh thu tổ chức < 1 triệu USD/năm.
+// Xem https://www.questpdf.com/license/ nếu vượt ngưỡng này.
+QuestPDF.Settings.License = LicenseType.Community;
+RegisterPdfFonts(builder.Environment.ContentRootPath);
+
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
+builder.Services.Configure<PublicApiOptions>(builder.Configuration.GetSection(PublicApiOptions.SectionName));
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
@@ -37,6 +44,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<SmtpEmailSender>();
 builder.Services.AddScoped<PasswordResetService>();
 builder.Services.AddScoped<PlatformDataService>();
+builder.Services.AddScoped<BookingPdfService>();
 builder.Services.AddScoped<RateQuoteService>();
 builder.Services.AddScoped<ScaleImportService>();
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
@@ -206,6 +214,18 @@ catch (Exception ex)
 }
 
 app.Run();
+
+static void RegisterPdfFonts(string contentRootPath)
+{
+    var fontsDir = Path.Combine(contentRootPath, "Fonts");
+    if (!Directory.Exists(fontsDir)) return;
+
+    foreach (var file in Directory.EnumerateFiles(fontsDir, "*.ttf"))
+    {
+        using var stream = File.OpenRead(file);
+        QuestPDF.Drawing.FontManager.RegisterFontWithCustomName("Be Vietnam Pro", stream);
+    }
+}
 
 static bool IsAllowedCorsOrigin(string origin)
 {

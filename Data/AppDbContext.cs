@@ -27,6 +27,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<PickupEvidence> PickupEvidence => Set<PickupEvidence>();
     public DbSet<PickupEvidenceBlob> PickupEvidenceBlobs => Set<PickupEvidenceBlob>();
     public DbSet<PickupConfirmationLog> PickupConfirmationLogs => Set<PickupConfirmationLog>();
+    public DbSet<BookingPdf> BookingPdfs => Set<BookingPdf>();
+    public DbSet<BookingPdfBlob> BookingPdfBlobs => Set<BookingPdfBlob>();
     public DbSet<CourierLocationTrack> CourierLocationTracks => Set<CourierLocationTrack>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
@@ -288,6 +290,34 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.ToTable("PickupEvidenceBlobs_ABCourier");
             entity.HasKey(x => x.EvidenceId);
             entity.Property(x => x.EvidenceId).ValueGeneratedNever();
+            entity.Property(x => x.FileContent).HasColumnType("varbinary(max)").IsRequired();
+        });
+
+        modelBuilder.Entity<BookingPdf>(entity =>
+        {
+            entity.ToTable("BookingPdfs_ABCourier");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.DownloadToken).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.FileName).HasMaxLength(260).IsRequired();
+            entity.Property(x => x.ContentType).HasMaxLength(80).IsRequired();
+            entity.HasIndex(x => x.BookingId);
+            entity.HasIndex(x => x.DownloadToken).IsUnique();
+            entity.HasOne(x => x.Booking)
+                .WithMany()
+                .HasForeignKey(x => x.BookingId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.Blob)
+                .WithOne(x => x.BookingPdf)
+                .HasForeignKey<BookingPdfBlob>(x => x.BookingPdfId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BookingPdfBlob>(entity =>
+        {
+            entity.ToTable("BookingPdfBlobs_ABCourier");
+            entity.HasKey(x => x.BookingPdfId);
+            entity.Property(x => x.BookingPdfId).ValueGeneratedNever();
             entity.Property(x => x.FileContent).HasColumnType("varbinary(max)").IsRequired();
         });
 

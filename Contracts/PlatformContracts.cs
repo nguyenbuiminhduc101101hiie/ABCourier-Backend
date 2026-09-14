@@ -131,7 +131,8 @@ public sealed record BookingDetailDto(
     BookingQuoteDto? Quote,
     DateTime CreatedAt,
     BookingQuoteDto? ScaleQuote = null,
-    string? CarrierCode = null);
+    string? CarrierCode = null,
+    string? PdfDownloadUrl = null);
 
 public sealed record UpdateBookingDetailsRequest(
     string? Note,
@@ -152,7 +153,24 @@ public sealed record JobSummaryDto(
     decimal Cost,
     decimal GrossProfit,
     decimal Margin,
-    string BillingStatus);
+    string BillingStatus,
+    IReadOnlyList<ChargeLineDto> ChargeLines);
+
+public sealed record ChargeLineDto(
+    string Id,
+    string ChargeKind,
+    string ChargeCode,
+    string Description,
+    decimal Amount,
+    string ApprovalStatus,
+    bool IsLocked);
+
+public sealed record UpsertChargeLineRequest(
+    string ChargeKind,
+    string ChargeCode,
+    string Description,
+    decimal Amount,
+    bool Approved);
 
 public sealed record CreateBookingRequest(
     string CustomerName,
@@ -181,7 +199,8 @@ public sealed record CreateBookingResult(
     decimal ChargeableWeight,
     string Zone,
     decimal QuoteTotal,
-    string Status);
+    string Status,
+    string? PdfDownloadUrl = null);
 
 public sealed record CreateJobRequest(string BookingId, Guid? AssignedUserId);
 public sealed record CreateJobResult(string JobId, string Awb, string Status);

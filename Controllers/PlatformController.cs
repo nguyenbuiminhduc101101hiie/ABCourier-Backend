@@ -183,6 +183,61 @@ public sealed class PlatformController(
         }
     }
 
+    [HttpPost("jobs/{jobId}/charge-lines")]
+    public async Task<ActionResult<ChargeLineDto>> CreateChargeLine(
+        string jobId,
+        [FromBody] UpsertChargeLineRequest request,
+        CancellationToken ct)
+    {
+        if (!CanManageChargeLines()) return StatusCode(403, new { message = "Cần quyền Admin, Staff hoặc Sales." });
+
+        try
+        {
+            var result = await service.CreateChargeLineAsync(jobId, request, ct);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPut("jobs/{jobId}/charge-lines/{lineId:guid}")]
+    public async Task<ActionResult<ChargeLineDto>> UpdateChargeLine(
+        string jobId,
+        Guid lineId,
+        [FromBody] UpsertChargeLineRequest request,
+        CancellationToken ct)
+    {
+        if (!CanManageChargeLines()) return StatusCode(403, new { message = "Cần quyền Admin, Staff hoặc Sales." });
+
+        try
+        {
+            var result = await service.UpdateChargeLineAsync(jobId, lineId, request, ct);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpDelete("jobs/{jobId}/charge-lines/{lineId:guid}")]
+    public async Task<IActionResult> DeleteChargeLine(string jobId, Guid lineId, CancellationToken ct)
+    {
+        if (!CanManageChargeLines()) return StatusCode(403, new { message = "Cần quyền Admin, Staff hoặc Sales." });
+
+        try
+        {
+            await service.DeleteChargeLineAsync(jobId, lineId, ct);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpGet("pickup-tasks")]
     public async Task<ActionResult<IReadOnlyList<PickupTaskDto>>> PickupTasks(CancellationToken ct)
     {
@@ -197,11 +252,15 @@ public sealed class PlatformController(
     }
 
     [HttpGet("pickup-tasks/{pickupNo}/directions")]
-    public async Task<ActionResult<DirectionsRouteDto>> PickupDirections(string pickupNo, CancellationToken ct)
+    public async Task<ActionResult<DirectionsRouteDto>> PickupDirections(
+        string pickupNo,
+        [FromQuery] double? lat,
+        [FromQuery] double? lng,
+        CancellationToken ct)
     {
         try
         {
-            var result = await service.GetPickupDirectionsAsync(pickupNo, ct);
+            var result = await service.GetPickupDirectionsAsync(pickupNo, lat, lng, ct);
             return result is null ? NotFound(new { message = "Không tìm thấy pickup task." }) : Ok(result);
         }
         catch (InvalidOperationException ex)
@@ -250,6 +309,15 @@ public sealed class PlatformController(
         {
             return BadRequest(new { message = ex.Message });
         }
+    }
+
+    [AllowAnonymous]
+    [HttpGet("booking-pdf/{token}")]
+    public async Task<IActionResult> BookingPdf(string token, CancellationToken ct)
+    {
+        var file = await service.OpenBookingPdfAsync(token, ct);
+        if (file is null) return NotFound();
+        return File(file.Value.Stream, file.Value.ContentType, file.Value.FileName);
     }
 
     [HttpGet("pickup-evidence/{id:guid}")]
@@ -417,6 +485,14 @@ public sealed class PlatformController(
     }
 
     private bool IsSales() => SalesFilter().HasValue;
+
+    private bool CanManageChargeLines()
+    {
+        var department = User.FindFirstValue("department") ?? "";
+        return department.Contains("Admin", StringComparison.OrdinalIgnoreCase) ||
+               department.Contains("Staff", StringComparison.OrdinalIgnoreCase) ||
+               department.Contains("Sales", StringComparison.OrdinalIgnoreCase);
+    }
 
     private Task NotifyBookingChangedAsync(string type, string bookingId, string? status, CancellationToken ct)
         => bookingHub.Clients.Group(BookingNotificationHub.CompanyGroup)

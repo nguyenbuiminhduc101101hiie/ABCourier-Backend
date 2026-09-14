@@ -1,13 +1,23 @@
 using CourierApi.Contracts;
 using CourierApi.Data;
 using CourierApi.Domain;
+using CourierApi.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace CourierApi.Services;
 
-public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes, IWebHostEnvironment env, IGeocodingService geocoding)
+public sealed class PlatformDataService(
+    AppDbContext db,
+    RateQuoteService quotes,
+    IWebHostEnvironment env,
+    IGeocodingService geocoding,
+    BookingPdfService pdfService,
+    IOptions<PublicApiOptions> publicApiOptions,
+    ILogger<PlatformDataService> logger)
 {
-    public async Task<DirectionsRouteDto?> GetPickupDirectionsAsync(string pickupNo, CancellationToken ct = default)
+    public async Task<DirectionsRouteDto?> GetPickupDirectionsAsync(
+        string pickupNo, double? originLat, double? originLng, CancellationToken ct = default)
     {
         var task = await db.PickupTasks
             .Include(x => x.Booking).ThenInclude(b => b.Customer)
@@ -20,24 +30,41 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
             throw new InvalidOperationException("Khách hàng chưa có địa chỉ.");
         }
 
-        var companyInfo = await db.CompanyInformation.AsNoTracking().OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(ct);
-        var originAddress = companyInfo?.Address?.Trim();
-        if (string.IsNullOrEmpty(originAddress))
+        double originGeoLat;
+        double originGeoLng;
+        string originAddress;
+        if (originLat is not null && originLng is not null)
         {
-            throw new InvalidOperationException("Chưa cấu hình địa chỉ công ty.");
+            // Điều hướng từ vị trí hiện tại của nhân viên (GPS thiết bị), không cần geocode.
+            originGeoLat = originLat.Value;
+            originGeoLng = originLng.Value;
+            originAddress = "Vị trí hiện tại";
+        }
+        else
+        {
+            var companyInfo = await db.CompanyInformation.AsNoTracking().OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+            var companyAddress = companyInfo?.Address?.Trim();
+            if (string.IsNullOrEmpty(companyAddress))
+            {
+                throw new InvalidOperationException("Chưa cấu hình địa chỉ công ty.");
+            }
+
+            var originGeo = await geocoding.GeocodeAddressAsync(companyAddress, ct)
+                ?? throw new InvalidOperationException("Không xác định được vị trí địa chỉ công ty.");
+            originGeoLat = originGeo.Lat;
+            originGeoLng = originGeo.Lng;
+            originAddress = companyAddress;
         }
 
-        var originGeo = await geocoding.GeocodeAddressAsync(originAddress, ct)
-            ?? throw new InvalidOperationException("Không xác định được vị trí địa chỉ công ty.");
         var destGeo = await geocoding.GeocodeAddressAsync(destinationAddress, ct)
             ?? throw new InvalidOperationException("Không xác định được vị trí địa chỉ khách hàng.");
 
-        var directions = await geocoding.GetDirectionsAsync(originGeo.Lat, originGeo.Lng, destGeo.Lat, destGeo.Lng, ct)
+        var directions = await geocoding.GetDirectionsAsync(originGeoLat, originGeoLng, destGeo.Lat, destGeo.Lng, ct)
             ?? throw new InvalidOperationException("Không tìm được tuyến đường.");
 
         return new DirectionsRouteDto(
-            originGeo.Lat,
-            originGeo.Lng,
+            originGeoLat,
+            originGeoLng,
             originAddress,
             destGeo.Lat,
             destGeo.Lng,
@@ -345,7 +372,59 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
         db.Bookings.Add(booking);
         await db.SaveChangesAsync(ct);
 
-        return new CreateBookingResult(booking.BookingNo, totalDim, totalChargeable, zone, total, status);
+        booking.Customer = customer;
+        booking.SenderAddress = sender;
+        booking.ReceiverAddress = receiver;
+        var pdfUrl = await TryGenerateBookingPdfAsync(booking, ct);
+
+        return new CreateBookingResult(booking.BookingNo, totalDim, totalChargeable, zone, total, status, pdfUrl);
+    }
+
+    private async Task<string?> GetOrCreateBookingPdfUrlAsync(Booking booking, CancellationToken ct)
+    {
+        var existingToken = await db.BookingPdfs
+            .Where(x => x.BookingId == booking.Id)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => x.DownloadToken)
+            .FirstOrDefaultAsync(ct);
+        if (existingToken is not null)
+            return $"{publicApiOptions.Value.BaseUrl.TrimEnd('/')}/api/platform/booking-pdf/{existingToken}";
+
+        return await TryGenerateBookingPdfAsync(booking, ct);
+    }
+
+    private async Task<string?> TryGenerateBookingPdfAsync(Booking booking, CancellationToken ct)
+    {
+        try
+        {
+            var detail = MapBookingDetail(booking);
+
+            var token = BookingPdfService.GenerateOpaqueToken();
+            var baseUrl = publicApiOptions.Value.BaseUrl.TrimEnd('/');
+            var pdfUrl = $"{baseUrl}/api/platform/booking-pdf/{token}";
+
+            var pdfBytes = await pdfService.RenderAsync(detail, pdfUrl, ct);
+
+            var pdfId = Guid.NewGuid();
+            db.BookingPdfs.Add(new BookingPdf
+            {
+                Id = pdfId,
+                BookingId = booking.Id,
+                DownloadToken = token,
+                FileName = $"{booking.BookingNo}.pdf",
+                ContentType = "application/pdf",
+                CreatedAt = DateTime.UtcNow
+            });
+            db.BookingPdfBlobs.Add(new BookingPdfBlob { BookingPdfId = pdfId, FileContent = pdfBytes });
+            await db.SaveChangesAsync(ct);
+
+            return pdfUrl;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Không tạo được PDF cho booking {BookingNo}", booking.BookingNo);
+            return null;
+        }
     }
 
     private CustomerAddress? SaveAddress(Guid customerId, BookingAddressDto? dto, string fallbackName, bool defaultSender, bool defaultReceiver)
@@ -382,7 +461,8 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
         if (booking is null) return null;
         if (customerId.HasValue && booking.CustomerId != customerId.Value) return null;
         if (salesUserId.HasValue && booking.Customer?.SalesUserId != salesUserId) return null;
-        return MapBookingDetail(booking);
+        var pdfUrl = await GetOrCreateBookingPdfUrlAsync(booking, ct);
+        return MapBookingDetail(booking, pdfUrl);
     }
 
     public async Task<BookingDetailDto> UpdateBookingDetailsAsync(
@@ -468,7 +548,9 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
 
         booking.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return MapBookingDetail(await LoadBookingAsync(booking.BookingNo, ct) ?? booking);
+        var updated = await LoadBookingAsync(booking.BookingNo, ct) ?? booking;
+        var pdfUrl = await GetOrCreateBookingPdfUrlAsync(updated, ct);
+        return MapBookingDetail(updated, pdfUrl);
     }
 
     private async Task<Booking?> LoadBookingAsync(string bookingIdOrNo, CancellationToken ct) =>
@@ -669,6 +751,93 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
 
         await db.SaveChangesAsync(ct);
         return new CreateJobResult(job.JobNo, job.Awb ?? normalized, job.Status);
+    }
+
+    public async Task<ChargeLineDto> CreateChargeLineAsync(string jobIdOrNo, UpsertChargeLineRequest request, CancellationToken ct = default)
+    {
+        var job = await db.Jobs.FirstOrDefaultAsync(
+            x => x.JobNo == jobIdOrNo || x.Id.ToString() == jobIdOrNo, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy job.");
+
+        ValidateChargeLineRequest(request);
+
+        var now = DateTime.UtcNow;
+        var line = new JobChargeLine
+        {
+            Id = Guid.NewGuid(),
+            JobId = job.Id,
+            ChargeKind = request.ChargeKind,
+            ChargeCode = request.ChargeCode.Trim(),
+            Description = request.Description.Trim(),
+            Quantity = 1,
+            UnitPrice = request.Amount,
+            Amount = request.Amount,
+            ApprovalStatus = request.Approved ? "Approved" : "Pending",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.JobChargeLines.Add(line);
+        await db.SaveChangesAsync(ct);
+        return MapChargeLine(line);
+    }
+
+    public async Task<ChargeLineDto> UpdateChargeLineAsync(string jobIdOrNo, Guid lineId, UpsertChargeLineRequest request, CancellationToken ct = default)
+    {
+        var job = await db.Jobs.FirstOrDefaultAsync(
+            x => x.JobNo == jobIdOrNo || x.Id.ToString() == jobIdOrNo, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy job.");
+
+        var line = await db.JobChargeLines.FirstOrDefaultAsync(x => x.Id == lineId && x.JobId == job.Id, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy dòng Debit/Credit.");
+        if (line.IsLocked)
+        {
+            throw new InvalidOperationException("Dòng đã khóa (đã xuất hóa đơn/gom billing batch), không thể sửa.");
+        }
+
+        ValidateChargeLineRequest(request);
+
+        line.ChargeKind = request.ChargeKind;
+        line.ChargeCode = request.ChargeCode.Trim();
+        line.Description = request.Description.Trim();
+        line.UnitPrice = request.Amount;
+        line.Amount = request.Amount;
+        line.ApprovalStatus = request.Approved ? "Approved" : "Pending";
+        line.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return MapChargeLine(line);
+    }
+
+    public async Task DeleteChargeLineAsync(string jobIdOrNo, Guid lineId, CancellationToken ct = default)
+    {
+        var job = await db.Jobs.FirstOrDefaultAsync(
+            x => x.JobNo == jobIdOrNo || x.Id.ToString() == jobIdOrNo, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy job.");
+
+        var line = await db.JobChargeLines.FirstOrDefaultAsync(x => x.Id == lineId && x.JobId == job.Id, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy dòng Debit/Credit.");
+        if (line.IsLocked)
+        {
+            throw new InvalidOperationException("Dòng đã khóa (đã xuất hóa đơn/gom billing batch), không thể xóa.");
+        }
+
+        db.JobChargeLines.Remove(line);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static void ValidateChargeLineRequest(UpsertChargeLineRequest request)
+    {
+        if (request.ChargeKind != "Debit" && request.ChargeKind != "Credit")
+        {
+            throw new InvalidOperationException("Loại dòng phải là Debit hoặc Credit.");
+        }
+        if (string.IsNullOrWhiteSpace(request.ChargeCode))
+        {
+            throw new InvalidOperationException("Mã phí (Code) là bắt buộc.");
+        }
+        if (string.IsNullOrWhiteSpace(request.Description))
+        {
+            throw new InvalidOperationException("Diễn giải là bắt buộc.");
+        }
     }
 
     public async Task EnsureAwbUniqueIndexAsync(CancellationToken ct = default)
@@ -904,6 +1073,16 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
         return (File.OpenRead(path), evidence.ContentType, evidence.FileName);
     }
 
+    public async Task<(Stream Stream, string ContentType, string FileName)?> OpenBookingPdfAsync(
+        string token, CancellationToken ct = default)
+    {
+        var record = await db.BookingPdfs
+            .Include(x => x.Blob)
+            .FirstOrDefaultAsync(x => x.DownloadToken == token, ct);
+        if (record?.Blob is null) return null;
+        return (new MemoryStream(record.Blob.FileContent), record.ContentType, record.FileName);
+    }
+
     public async Task<PickupTaskDto> DeletePickupEvidenceAsync(
         Guid evidenceId,
         Guid? userId,
@@ -1125,7 +1304,7 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
             string.IsNullOrWhiteSpace(booking.CarrierCode) ? null : booking.CarrierCode);
     }
 
-    private static BookingDetailDto MapBookingDetail(Booking booking)
+    private static BookingDetailDto MapBookingDetail(Booking booking, string? pdfUrl = null)
     {
         var declared = DeclaredQuote(booking);
         var scale = ScaleQuote(booking);
@@ -1154,7 +1333,8 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
             MapQuoteDto(declared),
             booking.CreatedAt,
             MapQuoteDto(scale),
-            string.IsNullOrWhiteSpace(booking.CarrierCode) ? null : booking.CarrierCode);
+            string.IsNullOrWhiteSpace(booking.CarrierCode) ? null : booking.CarrierCode,
+            pdfUrl);
     }
 
     private PickupTaskDto MapPickupTask(PickupTask t, IReadOnlyDictionary<Guid, string> names)
@@ -1335,8 +1515,18 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
             cost,
             profit,
             margin,
-            job.BillingStatus);
+            job.BillingStatus,
+            job.ChargeLines.Select(MapChargeLine).ToList());
     }
+
+    private static ChargeLineDto MapChargeLine(JobChargeLine line) => new(
+        line.Id.ToString(),
+        line.ChargeKind,
+        line.ChargeCode,
+        line.Description,
+        line.Amount,
+        line.ApprovalStatus,
+        line.IsLocked);
 
     public Task<BookingRateQuoteDto> PreviewQuoteAsync(
         BookingQuotePreviewRequest request,

@@ -290,6 +290,27 @@ public sealed class PickupEvidenceBlob
     public PickupEvidence Evidence { get; set; } = null!;
 }
 
+public sealed class BookingPdf
+{
+    public Guid Id { get; set; }
+    public Guid BookingId { get; set; }
+    public string DownloadToken { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = "application/pdf";
+    public DateTime CreatedAt { get; set; }
+
+    public Booking Booking { get; set; } = null!;
+    public BookingPdfBlob? Blob { get; set; }
+}
+
+public sealed class BookingPdfBlob
+{
+    public Guid BookingPdfId { get; set; }
+    public byte[] FileContent { get; set; } = [];
+
+    public BookingPdf BookingPdf { get; set; } = null!;
+}
+
 public sealed class PickupConfirmationLog
 {
     public Guid Id { get; set; }
