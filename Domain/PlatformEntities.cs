@@ -253,6 +253,19 @@ public sealed class PickupTask
     public ICollection<PickupConfirmationLog> ConfirmationLogs { get; set; } = [];
 }
 
+public sealed class CourierLocationTrack
+{
+    public Guid Id { get; set; }
+    public Guid PickupTaskId { get; set; }
+    public Guid UserId { get; set; }
+    public decimal Latitude { get; set; }
+    public decimal Longitude { get; set; }
+    public DateTime RecordedAtUtc { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    public PickupTask PickupTask { get; set; } = null!;
+}
+
 public sealed class PickupEvidence
 {
     public Guid Id { get; set; }

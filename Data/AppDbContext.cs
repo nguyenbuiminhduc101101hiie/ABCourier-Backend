@@ -27,6 +27,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<PickupEvidence> PickupEvidence => Set<PickupEvidence>();
     public DbSet<PickupEvidenceBlob> PickupEvidenceBlobs => Set<PickupEvidenceBlob>();
     public DbSet<PickupConfirmationLog> PickupConfirmationLogs => Set<PickupConfirmationLog>();
+    public DbSet<CourierLocationTrack> CourierLocationTracks => Set<CourierLocationTrack>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
     public DbSet<PackageScaleBatch> PackageScaleBatches => Set<PackageScaleBatch>();
@@ -298,6 +299,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.Action).HasMaxLength(40).IsRequired();
             entity.Property(x => x.Detail).HasMaxLength(500).IsRequired();
             entity.HasIndex(x => new { x.PickupTaskId, x.SequenceNo }).IsUnique();
+        });
+
+        modelBuilder.Entity<CourierLocationTrack>(entity =>
+        {
+            entity.ToTable("CourierLocationTracks_ABCourier");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Latitude).HasPrecision(10, 7);
+            entity.Property(x => x.Longitude).HasPrecision(10, 7);
+            entity.HasIndex(x => new { x.PickupTaskId, x.RecordedAtUtc });
+            entity.HasOne(x => x.PickupTask).WithMany().HasForeignKey(x => x.PickupTaskId);
         });
 
         modelBuilder.Entity<Invoice>(entity =>

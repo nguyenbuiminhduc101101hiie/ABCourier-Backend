@@ -12,3 +12,5 @@ public sealed record DirectionsRouteDto(
     IReadOnlyList<GeoPointDto> Polyline,
     double DistanceMeters,
     double DurationSeconds);
+
+public sealed record SaveCourierLocationRequest(double Latitude, double Longitude, DateTime? RecordedAtUtc);

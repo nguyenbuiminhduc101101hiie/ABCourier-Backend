@@ -47,6 +47,26 @@ public sealed class PlatformDataService(AppDbContext db, RateQuoteService quotes
             directions.DurationSeconds);
     }
 
+    public async Task SaveCourierLocationAsync(string pickupNo, SaveCourierLocationRequest request, Guid? userId, CancellationToken ct = default)
+    {
+        if (userId is null) throw new InvalidOperationException("Không xác định được nhân viên đăng nhập.");
+
+        var task = await db.PickupTasks.FirstOrDefaultAsync(x => x.PickupNo == pickupNo, ct)
+            ?? throw new InvalidOperationException("Không tìm thấy pickup task.");
+
+        db.CourierLocationTracks.Add(new CourierLocationTrack
+        {
+            Id = Guid.NewGuid(),
+            PickupTaskId = task.Id,
+            UserId = userId.Value,
+            Latitude = (decimal)request.Latitude,
+            Longitude = (decimal)request.Longitude,
+            RecordedAtUtc = request.RecordedAtUtc ?? DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task<DashboardDto> GetDashboardAsync(Guid? customerId, CancellationToken ct = default, Guid? salesUserId = null)
     {
         var bookingsQuery = db.Bookings.AsQueryable();

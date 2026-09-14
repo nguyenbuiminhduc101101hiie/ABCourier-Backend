@@ -210,6 +210,20 @@ public sealed class PlatformController(
         }
     }
 
+    [HttpPost("pickup-tasks/{pickupNo}/location")]
+    public async Task<IActionResult> SaveCourierLocation(string pickupNo, [FromBody] SaveCourierLocationRequest request, CancellationToken ct)
+    {
+        try
+        {
+            await service.SaveCourierLocationAsync(pickupNo, request, CurrentUserId(), ct);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpPost("pickup-tasks/{pickupNo}/confirm")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(20 * 1024 * 1024)]
