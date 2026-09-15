@@ -38,6 +38,7 @@ builder.Services.AddSingleton<FedExRateWorkbookParser>();
 builder.Services.AddSingleton<DhlRateWorkbookParser>();
 builder.Services.AddSingleton<RateWorkbookParserResolver>();
 builder.Services.AddSingleton<RateImportPreviewStore>();
+builder.Services.AddSingleton<CloneJobStore>();
 builder.Services.AddScoped<RateImportApplicationService>();
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 builder.Services.AddScoped<AuthService>();
