@@ -80,6 +80,12 @@ builder.Services
     });
 builder.Services.AddAuthorization();
 
+var allowedCorsHosts = builder.Configuration.GetSection("Cors:Origins").Get<string[]>()?
+    .Select(origin => Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? uri.Host : null)
+    .OfType<string>()
+    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+    ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Flutter", policy =>
@@ -227,7 +233,7 @@ static void RegisterPdfFonts(string contentRootPath)
     }
 }
 
-static bool IsAllowedCorsOrigin(string origin)
+bool IsAllowedCorsOrigin(string origin)
 {
     if (string.IsNullOrWhiteSpace(origin) || !Uri.TryCreate(origin, UriKind.Absolute, out var uri))
         return false;
@@ -236,5 +242,5 @@ static bool IsAllowedCorsOrigin(string origin)
         uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase))
         return true;
 
-    return uri.Host.Equals("abcourier.nvocc.vn", StringComparison.OrdinalIgnoreCase);
+    return allowedCorsHosts.Contains(uri.Host);
 }
