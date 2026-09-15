@@ -16,7 +16,8 @@ public sealed class RateImportApplicationService(
     IServiceScopeFactory scopeFactory,
     ILogger<RateImportApplicationService> logger)
 {
-    private const int ProgressFlushBandThreshold = 250;
+    private const int ProgressReportBandThreshold = 250;
+
     public async Task<RateImportPreviewResponse> PreviewAsync(
         Stream fileStream,
         string fileName,
@@ -668,6 +669,7 @@ public sealed class RateImportApplicationService(
                 card.Bands.Add(new RateBand
                 {
                     Id = Guid.NewGuid(),
+                    RateCardId = card.Id,
                     ZoneCode = sourceBand.ZoneCode,
                     WeightFrom = sourceBand.WeightFrom,
                     WeightTo = sourceBand.WeightTo,
@@ -680,9 +682,8 @@ public sealed class RateImportApplicationService(
             clone.RateCards.Add(card);
             pendingBandCount += sourceCard.Bands.Count;
 
-            if (pendingBandCount >= ProgressFlushBandThreshold)
+            if (pendingBandCount >= ProgressReportBandThreshold)
             {
-                await targetDb.SaveChangesAsync(cancellationToken);
                 processedBands += pendingBandCount;
                 pendingBandCount = 0;
                 onProgress?.Invoke(CloneJobStep.Cloning, processedBands);
@@ -691,7 +692,6 @@ public sealed class RateImportApplicationService(
 
         if (pendingBandCount > 0)
         {
-            await targetDb.SaveChangesAsync(cancellationToken);
             processedBands += pendingBandCount;
             onProgress?.Invoke(CloneJobStep.Cloning, processedBands);
         }
