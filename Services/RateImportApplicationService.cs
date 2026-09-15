@@ -396,6 +396,7 @@ public sealed class RateImportApplicationService(
         }
 
         var source = await db.RateImportBatches
+            .AsSplitQuery()
             .Include(x => x.RateCards).ThenInclude(card => card.Bands)
             .Include(x => x.CountryZones)
             .Include(x => x.Surcharges)
@@ -428,6 +429,18 @@ public sealed class RateImportApplicationService(
         var cloneId = Guid.NewGuid();
         var fileHash = ComputeCloneHash(source.Id, newCode, request.AdjustmentPercent, cloneId);
 
+        var activeCardsByKey = new Dictionary<(string CarrierCode, string Direction, string ServiceCode, string PackageType), List<RateCard>>();
+        if (request.Activate)
+        {
+            var candidateCards = await db.RateCards
+                .Where(x => x.ImportBatch.CustomerId == customer.Id && x.IsActive)
+                .ToListAsync(cancellationToken);
+
+            activeCardsByKey = candidateCards
+                .GroupBy(x => (x.CarrierCode, x.Direction, x.ServiceCode, x.PackageType))
+                .ToDictionary(g => g.Key, g => g.ToList());
+        }
+
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
         var clone = new RateImportBatch
@@ -458,29 +471,20 @@ public sealed class RateImportApplicationService(
             var activateThisCard = false;
             if (request.Activate)
             {
-                var hasNewerActiveVersion = await db.RateCards.AnyAsync(
-                    x => x.ImportBatch.CustomerId == customer.Id &&
-                         x.CarrierCode == sourceCard.CarrierCode &&
-                         x.Direction == sourceCard.Direction &&
-                         x.ServiceCode == sourceCard.ServiceCode &&
-                         x.PackageType == sourceCard.PackageType &&
-                         x.IsActive &&
-                         x.EffectiveFrom > sourceCard.EffectiveFrom,
-                    cancellationToken);
+                var key = (sourceCard.CarrierCode, sourceCard.Direction, sourceCard.ServiceCode, sourceCard.PackageType);
+                activeCardsByKey.TryGetValue(key, out var candidates);
+                candidates ??= [];
+
+                var hasNewerActiveVersion = candidates.Any(
+                    x => x.IsActive && x.EffectiveFrom > sourceCard.EffectiveFrom);
 
                 activateThisCard = !hasNewerActiveVersion;
 
                 if (activateThisCard)
                 {
-                    var oldActiveCards = await db.RateCards
-                        .Where(x => x.ImportBatch.CustomerId == customer.Id &&
-                                    x.CarrierCode == sourceCard.CarrierCode &&
-                                    x.Direction == sourceCard.Direction &&
-                                    x.ServiceCode == sourceCard.ServiceCode &&
-                                    x.PackageType == sourceCard.PackageType &&
-                                    x.IsActive &&
-                                    x.EffectiveFrom <= sourceCard.EffectiveFrom)
-                        .ToListAsync(cancellationToken);
+                    var oldActiveCards = candidates
+                        .Where(x => x.IsActive && x.EffectiveFrom <= sourceCard.EffectiveFrom)
+                        .ToList();
 
                     foreach (var oldCard in oldActiveCards)
                     {
