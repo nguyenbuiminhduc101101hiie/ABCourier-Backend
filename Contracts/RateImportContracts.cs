@@ -114,6 +114,19 @@ public sealed record RateImportCloneResponse(
     int SurchargeCount,
     DateTime CommittedAtUtc);
 
+public sealed record RateImportCloneStartResponse(
+    Guid JobId,
+    int TotalBands);
+
+public sealed record RateImportCloneStatusResponse(
+    string Status,
+    string CurrentStep,
+    int ProcessedBands,
+    int TotalBands,
+    RateImportCloneResponse? Result,
+    string? Error,
+    string? ErrorType);
+
 public sealed record RateImportDeleteResponse(
     Guid BatchId,
     string? RateSetCode,
