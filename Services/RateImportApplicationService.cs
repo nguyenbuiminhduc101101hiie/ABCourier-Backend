@@ -11,8 +11,12 @@ public sealed class RateImportApplicationService(
     AppDbContext db,
     RateWorkbookParserResolver parserResolver,
     RateImportPreviewStore previewStore,
-    AuthService auth)
+    AuthService auth,
+    CloneJobStore cloneJobs,
+    IServiceScopeFactory scopeFactory,
+    ILogger<RateImportApplicationService> logger)
 {
+    private const int ProgressFlushBandThreshold = 250;
     public async Task<RateImportPreviewResponse> PreviewAsync(
         Stream fileStream,
         string fileName,
@@ -371,6 +375,111 @@ public sealed class RateImportApplicationService(
         RateImportCloneRequest request,
         CancellationToken cancellationToken)
     {
+        var prep = await PrepareCloneAsync(request, cancellationToken);
+        return await CloneCoreAsync(
+            db,
+            request,
+            prep.Customer.Id,
+            prep.SalesUserId,
+            prep.NewCode,
+            prep.SourceCode,
+            onProgress: null,
+            cancellationToken);
+    }
+
+    public async Task<(Guid JobId, int TotalBands)> StartCloneRateSetAsync(
+        RateImportCloneRequest request,
+        CancellationToken cancellationToken)
+    {
+        var prep = await PrepareCloneAsync(request, cancellationToken);
+        var jobId = Guid.NewGuid();
+        cloneJobs.Create(jobId, prep.TotalBands);
+
+        _ = Task.Run(() => RunCloneJobAsync(
+            jobId,
+            request,
+            prep.Customer.Id,
+            prep.SalesUserId,
+            prep.NewCode,
+            prep.SourceCode));
+
+        return (jobId, prep.TotalBands);
+    }
+
+    private async Task RunCloneJobAsync(
+        Guid jobId,
+        RateImportCloneRequest request,
+        Guid customerId,
+        Guid? salesUserId,
+        string newCode,
+        string sourceCode)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        try
+        {
+            var result = await CloneCoreAsync(
+                scopedDb,
+                request,
+                customerId,
+                salesUserId,
+                newCode,
+                sourceCode,
+                onProgress: (step, processedBands) => cloneJobs.Update(jobId, s => s with
+                {
+                    CurrentStep = step,
+                    ProcessedBands = processedBands ?? s.ProcessedBands
+                }),
+                CancellationToken.None);
+
+            cloneJobs.Update(jobId, s => s with
+            {
+                Status = CloneJobState.Completed,
+                CurrentStep = CloneJobStep.Done,
+                ProcessedBands = s.TotalBands,
+                Result = result
+            });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            cloneJobs.Update(jobId, s => s with
+            {
+                Status = CloneJobState.Failed,
+                Error = ex.Message,
+                ErrorType = CloneJobErrorType.NotFound
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            cloneJobs.Update(jobId, s => s with
+            {
+                Status = CloneJobState.Failed,
+                Error = ex.Message,
+                ErrorType = CloneJobErrorType.Validation
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Clone job {JobId} failed unexpectedly", jobId);
+            cloneJobs.Update(jobId, s => s with
+            {
+                Status = CloneJobState.Failed,
+                Error = "Đã xảy ra lỗi không mong muốn khi tạo bộ giá mới.",
+                ErrorType = CloneJobErrorType.Unexpected
+            });
+        }
+    }
+
+    /// <summary>
+    /// Validate nhanh + resolve các tham chiếu (khách hàng, sales, mã trùng...)
+    /// mà KHÔNG tải toàn bộ rate card/band của bộ giá nguồn — dùng chung cho cả
+    /// luồng đồng bộ và luồng job nền, để báo lỗi input sai ngay lập tức.
+    /// </summary>
+    private async Task<CloneJobPreparation> PrepareCloneAsync(
+        RateImportCloneRequest request,
+        CancellationToken cancellationToken)
+    {
         var newCode = request.NewRateSetCode.Trim();
 
         if (request.SourceBatchId == Guid.Empty)
@@ -395,23 +504,26 @@ public sealed class RateImportApplicationService(
             throw new InvalidOperationException("Phần trăm điều chỉnh phải nằm trong khoảng -99 đến 500.");
         }
 
-        var source = await db.RateImportBatches
-            .AsSplitQuery()
-            .Include(x => x.RateCards).ThenInclude(card => card.Bands)
-            .Include(x => x.CountryZones)
-            .Include(x => x.Surcharges)
-            .FirstOrDefaultAsync(
-                x => x.Id == request.SourceBatchId && x.Status == "Committed",
-                cancellationToken)
+        var sourceSummary = await db.RateImportBatches
+            .Where(x => x.Id == request.SourceBatchId && x.Status == "Committed")
+            .Select(x => new
+            {
+                x.RateSetCode,
+                x.FileName,
+                x.CustomerId,
+                x.RateBandCount,
+                x.SalesUserId
+            })
+            .FirstOrDefaultAsync(cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy bộ giá nguồn.");
 
         var salesUserId = await auth.ResolveSalesUserIdAsync(
-            request.SalesUserId ?? source.SalesUserId ?? customer.SalesUserId,
+            request.SalesUserId ?? sourceSummary.SalesUserId ?? customer.SalesUserId,
             cancellationToken);
 
-        var sourceCode = source.RateSetCode ?? source.FileName;
-        if (source.CustomerId == customer.Id &&
-            string.Equals(source.RateSetCode, newCode, StringComparison.Ordinal))
+        var sourceCode = sourceSummary.RateSetCode ?? sourceSummary.FileName;
+        if (sourceSummary.CustomerId == customer.Id &&
+            string.Equals(sourceSummary.RateSetCode, newCode, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Khi nhân bản cho cùng khách hàng, bộ giá mới phải có mã/tên khác bộ giá nguồn.");
         }
@@ -424,16 +536,46 @@ public sealed class RateImportApplicationService(
             throw new InvalidOperationException($"Khách hàng “{customer.CompanyName}” đã có mã/tên “{newCode}”. Hãy chọn tên khác.");
         }
 
-        var factor = 1m + (request.AdjustmentPercent / 100m);
-        var now = DateTime.UtcNow;
-        var cloneId = Guid.NewGuid();
-        var fileHash = ComputeCloneHash(source.Id, newCode, request.AdjustmentPercent, cloneId);
+        return new CloneJobPreparation(customer, salesUserId, newCode, sourceCode, sourceSummary.RateBandCount);
+    }
+
+    private sealed record CloneJobPreparation(
+        Customer Customer,
+        Guid? SalesUserId,
+        string NewCode,
+        string SourceCode,
+        int TotalBands);
+
+    /// <summary>
+    /// Phần nặng thực sự: tải toàn bộ bộ giá nguồn, nhân bản card/band/zone/phụ phí,
+    /// ghi DB theo lô (để job nền có thể báo tiến trình thật), commit transaction.
+    /// Dùng chung cho cả CloneRateSetAsync (đồng bộ) và RunCloneJobAsync (nền).
+    /// </summary>
+    private async Task<RateImportCloneResponse> CloneCoreAsync(
+        AppDbContext targetDb,
+        RateImportCloneRequest request,
+        Guid customerId,
+        Guid? salesUserId,
+        string newCode,
+        string sourceCode,
+        Action<CloneJobStep, int?>? onProgress,
+        CancellationToken cancellationToken)
+    {
+        var source = await targetDb.RateImportBatches
+            .AsSplitQuery()
+            .Include(x => x.RateCards).ThenInclude(card => card.Bands)
+            .Include(x => x.CountryZones)
+            .Include(x => x.Surcharges)
+            .FirstOrDefaultAsync(
+                x => x.Id == request.SourceBatchId && x.Status == "Committed",
+                cancellationToken)
+            ?? throw new KeyNotFoundException("Không tìm thấy bộ giá nguồn.");
 
         var activeCardsByKey = new Dictionary<(string CarrierCode, string Direction, string ServiceCode, string PackageType), List<RateCard>>();
         if (request.Activate)
         {
-            var candidateCards = await db.RateCards
-                .Where(x => x.ImportBatch.CustomerId == customer.Id && x.IsActive)
+            var candidateCards = await targetDb.RateCards
+                .Where(x => x.ImportBatch.CustomerId == customerId && x.IsActive)
                 .ToListAsync(cancellationToken);
 
             activeCardsByKey = candidateCards
@@ -441,12 +583,19 @@ public sealed class RateImportApplicationService(
                 .ToDictionary(g => g.Key, g => g.ToList());
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        var factor = 1m + (request.AdjustmentPercent / 100m);
+        var now = DateTime.UtcNow;
+        var cloneId = Guid.NewGuid();
+        var fileHash = ComputeCloneHash(source.Id, newCode, request.AdjustmentPercent, cloneId);
+
+        await using var transaction = await targetDb.Database.BeginTransactionAsync(cancellationToken);
+
+        onProgress?.Invoke(CloneJobStep.Cloning, 0);
 
         var clone = new RateImportBatch
         {
             Id = cloneId,
-            CustomerId = customer.Id,
+            CustomerId = customerId,
             SalesUserId = salesUserId,
             CarrierCode = source.CarrierCode,
             RateSetCode = newCode,
@@ -464,7 +613,10 @@ public sealed class RateImportApplicationService(
             CommittedAtUtc = now
         };
 
-        db.RateImportBatches.Add(clone);
+        targetDb.RateImportBatches.Add(clone);
+
+        var pendingBandCount = 0;
+        var processedBands = 0;
 
         foreach (var sourceCard in source.RateCards)
         {
@@ -526,7 +678,25 @@ public sealed class RateImportApplicationService(
             }
 
             clone.RateCards.Add(card);
+            pendingBandCount += sourceCard.Bands.Count;
+
+            if (pendingBandCount >= ProgressFlushBandThreshold)
+            {
+                await targetDb.SaveChangesAsync(cancellationToken);
+                processedBands += pendingBandCount;
+                pendingBandCount = 0;
+                onProgress?.Invoke(CloneJobStep.Cloning, processedBands);
+            }
         }
+
+        if (pendingBandCount > 0)
+        {
+            await targetDb.SaveChangesAsync(cancellationToken);
+            processedBands += pendingBandCount;
+            onProgress?.Invoke(CloneJobStep.Cloning, processedBands);
+        }
+
+        onProgress?.Invoke(CloneJobStep.SavingZonesAndSurcharges, null);
 
         foreach (var mapping in source.CountryZones)
         {
@@ -567,7 +737,9 @@ public sealed class RateImportApplicationService(
             });
         }
 
-        await db.SaveChangesAsync(cancellationToken);
+        await targetDb.SaveChangesAsync(cancellationToken);
+
+        onProgress?.Invoke(CloneJobStep.Committing, null);
         await transaction.CommitAsync(cancellationToken);
 
         return new RateImportCloneResponse(
