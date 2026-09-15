@@ -49,6 +49,12 @@ public sealed class CloneJobStore(IMemoryCache cache)
         Save(new CloneJobStatus(jobId, CloneJobState.Running, CloneJobStep.LoadingSource, 0, totalBands));
     }
 
+    /// <summary>
+    /// Read-then-write với không khóa — chỉ an toàn vì hiện tại mỗi jobId chỉ có
+    /// đúng 1 writer (task nền chạy RunCloneJobAsync); các HTTP request khác chỉ
+    /// gọi TryGet (đọc). Nếu sau này thêm chỗ gọi Update từ HTTP thread (vd. API
+    /// hủy job), cần thêm khóa để tránh lost-update.
+    /// </summary>
     public void Update(Guid jobId, Func<CloneJobStatus, CloneJobStatus> updater)
     {
         if (TryGet(jobId, out var current))

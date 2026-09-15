@@ -414,11 +414,11 @@ public sealed class RateImportApplicationService(
         string newCode,
         string sourceCode)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
         try
         {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
             var result = await CloneCoreAsync(
                 scopedDb,
                 request,
