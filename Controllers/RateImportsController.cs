@@ -9,7 +9,9 @@ namespace CourierApi.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/rate-imports")]
-public sealed class RateImportsController(RateImportApplicationService service) : ControllerBase
+public sealed class RateImportsController(
+    RateImportApplicationService service,
+    CloneJobStore cloneJobs) : ControllerBase
 {
     private const long MaxFileSize = 20 * 1024 * 1024;
 
@@ -141,6 +143,46 @@ public sealed class RateImportsController(RateImportApplicationService service) 
         {
             return BadRequest(new { message = ex.Message });
         }
+    }
+
+    [HttpPost("clone/start")]
+    public async Task<ActionResult<RateImportCloneStartResponse>> CloneStart(
+        [FromBody] RateImportCloneRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (IsSales()) return Forbid();
+        try
+        {
+            var (jobId, totalBands) = await service.StartCloneRateSetAsync(request, cancellationToken);
+            return Ok(new RateImportCloneStartResponse(jobId, totalBands));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("clone/status/{jobId:guid}")]
+    public ActionResult<RateImportCloneStatusResponse> CloneStatus(Guid jobId)
+    {
+        if (IsSales()) return Forbid();
+        if (!cloneJobs.TryGet(jobId, out var status))
+        {
+            return NotFound(new { message = "Không tìm thấy tiến trình. Có thể đã hết hạn." });
+        }
+
+        return Ok(new RateImportCloneStatusResponse(
+            status.Status.ToString(),
+            status.CurrentStep.ToString(),
+            status.ProcessedBands,
+            status.TotalBands,
+            status.Result,
+            status.Error,
+            status.ErrorType?.ToString()));
     }
 
     [HttpPatch("batches/{batchId:guid}/rate-set-code")]
